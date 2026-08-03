@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Audio Hybridizer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/wavesurfer.min.js"></script>
+    <script src="https://unpkg.com/wavesurfer.js@7/dist/plugins/regions.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <!-- lamejs for MP3 encoding -->
+    <script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
+    <style>
+        body { background-color: #0f0f0f; color: #E0E0E0; font-family: 'Inter', system-ui, -apple-system, sans-serif; overflow-x: hidden; }
+        .waveform-container { background: #181818; border-radius: 8px; position: relative; border: 1px solid #333; }
+        .track-a-color { color: #14b8a6; }
+        .track-b-color { color: #8b5cf6; }
+        .bg-track-a { background-color: #14b8a6; }
+        .bg-track-b { background-color: #8b5cf6; }
+        .playlist-item { transition: transform 0.1s; }
+        .sortable-ghost { opacity: 0.4; background: #3f3f46 !important; }
+        .modal-overlay { background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(4px); }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f0f0f; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+        
+        .slice-btn-a { border: 1px solid #14b8a6; color: #14b8a6; }
+        .slice-btn-a:hover { background: #14b8a6; color: white; }
+        .slice-btn-b { border: 1px solid #8b5cf6; color: #8b5cf6; }
+        .slice-btn-b:hover { background: #8b5cf6; color: white; }
+        
+        #error-toast {
+            position: fixed;
+            bottom: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            display: none;
+        }
+
+        .precise-input {
+            background: #181818;
+            border: 1px solid #333;
+            color: #E0E0E0;
+            font-family: monospace;
+            width: 80px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .ws-region-label {
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 2px 6px;
+            font-size: 10px;
+            font-weight: bold;
+            border-radius: 4px;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .edit-active {
+            border: 1px solid #ef4444 !important;
+            box-shadow: 0 0 15px rgba(239, 68, 68, 0.2);
+        }
+
+        .spinning { animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+        #debug-log {
+            background: #000;
+            font-family: monospace;
+            font-size: 10px;
+            color: #0f0;
+            padding: 10px;
+            height: 120px;
+            overflow-y: auto;
+            border-top: 1px solid #333;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-6 min-h-screen flex flex-col">
+    <!-- Error Toast -->
+    <div id="error-toast" class="bg-red-600 text-white px-6 py-3 rounded-full shadow-2xl flex items-center gap-3">
+        <i data-lucide="alert-circle"></i>
+        <span id="error-message">Error loading file</span>
+        <button onclick="this.parentElement.style.display='none'" class="hover:bg-red-700 p-1 rounded-full"><i data-lucide="x" class="w-4 h-4"></i></button>
+    </div>
+
+    <!-- Onboarding Modal -->
+    <div id="onboarding-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay hidden">
+        <div class="bg-zinc-900 border border-zinc-800 p-8 rounded-2xl max-w-lg w-full shadow-2xl">
+            <h2 class="text-2xl font-bold mb-4 flex items-center gap-2">
+                <i data-lucide="info" class="text-blue-400"></i> Hybridizer Workflow
+            </h2>
+            <ol class="space-y-4 text-zinc-300 mb-8 text-sm">
+                <li class="flex gap-3"><span class="bg-zinc-800 w-6 h-6 flex items-center justify-center rounded-full text-xs shrink-0">1</span> Load <b>Source 1</b> (Recitation) and <b>Source 2</b> (AI Interpretation).</li>
+                <li class="flex gap-3"><span class="bg-zinc-800 w-6 h-6 flex items-center justify-center rounded-full text-xs shrink-0">2</span> Slice segments for <b>Verses</b> from Source 1 and <b>Interpretations</b> from Source 2.</li>
+                <li class="flex gap-3"><span class="bg-zinc-800 w-6 h-6 flex items-center justify-center rounded-full text-xs shrink-0">3</span> Use the <b>Sequencer</b> to interleave them (e.g., Verse 1 → Interpretation 1 → Verse 2...).</li>
+                <li class="flex gap-3"><span class="bg-zinc-800 w-6 h-6 flex items-center justify-center rounded-full text-xs shrink-0">4</span> Preview the result in <b>Hybrid Output</b> and export as a high-quality <b>MP3</b> or <b>WAV</b>.</li>
+            </ol>
+            <div class="flex items-center justify-between">
+                <label class="flex items-center gap-2 text-sm text-zinc-500 cursor-pointer">
+                    <input type="checkbox" id="dont-show-again" class="rounded border-zinc-700 bg-zinc-800"> Don't show again
+                </label>
+                <button id="close-onboarding" class="bg-white text-black px-6 py-2 rounded-lg font-bold hover:bg-zinc-200">Get Started</button>
+            </div>
+        </div>
+    </div>
+
+    <header class="max-w-7xl mx-auto w-full mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+            <h1 class="text-3xl font-bold tracking-tight">Universal Audio Hybridizer</h1>
+            <p class="text-zinc-500 text-sm mt-1">Surgical audio assembly and dual-track synchronization</p>
+        </div>
+        <div class="flex items-center gap-4">
+            <div id="global-status" class="px-3 py-1 rounded-full bg-zinc-800 text-[10px] font-bold uppercase tracking-widest text-zinc-400 border border-zinc-700">Ready</div>
+            <button id="help-btn" class="p-2 rounded-full hover:bg-zinc-800 text-zinc-400"><i data-lucide="help-circle" class="w-5 h-5"></i></button>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto w-full grid grid-cols-1 lg:grid-cols-12 gap-8 flex-grow mb-8">
+        
+        <div class="lg:col-span-8 space-y-8">
+            <!-- Track A -->
+            <section class="space-y-4">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <span class="w-3 h-3 rounded-full bg-track-a"></span>
+                        <h3 class="font-semibold text-zinc-200 text-sm uppercase tracking-wider">Source Track 1 (Recitation)</h3>
+                    </div>
+                    <div class="flex gap-2">
+                        <input type="file" id="file-a" class="hidden" accept="audio/*, .mp3, .wav, .m4a, .aac, .ogg">
+                        <button onclick="document.getElementById('file-a').click()" class="text-[10px] bg-zinc-800 px-3 py-1 rounded-full border border-zinc-700 hover:bg-zinc-700 transition-colors uppercase font-bold">Load Audio</button>
+                    </div>
+                </div>
+                <div id="wave-a" class="waveform-container h-32"></div>
+                <div class="flex flex-wrap gap-4 items-center bg-zinc-900/50 p-3 rounded-xl border border-zinc-800">
+                    <button id="play-a" class="w-8 h-8 flex items-center justify-center bg-zinc-800 rounded-full hover:bg-zinc-700"><i data-lucide="play" class="w-4 h-4"></i></button>
+                    <span id="time-a" class="font-mono text-zinc-500 text-xs">00:00 / 00:00</span>
+                    <div class="flex items-center gap-2 ml-auto">
+                        <label class="text-[10px] text-zinc-500 font-bold uppercase">Start</label>
+                        <input type="number" id="precise-start-a" class="precise-input" value="0" step="0.1">
+                        <label class="text-[10px] text-zinc-500 font-bold uppercase">End</label>
+                        <input type="number" id="precise-end-a" class="precise-input" value="0" step="0.1">
+                        <button id="precise-add-a" class="bg-teal-600/20 text-teal-400 border border-teal-600/30 text-[10px] px-3 py-1 rounded-md font-bold hover:bg-teal-600 hover:text-white transition-all uppercase">Add Range</button>
+                        <button id="slice-a" class="flex items-center gap-2 px-4 py-1.5 rounded-lg slice-btn-a text-[10px] font-bold transition-all disabled:opacity-30 uppercase">
+                            <i data-lucide="scissors" class="w-3 h-3"></i> Slice
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Track B -->
+            <section class="space-y-4">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <span class="w-3 h-3 rounded-full bg-track-b"></span>
+                        <h3 class="font-semibold text-zinc-200 text-sm uppercase tracking-wider">Source Track 2 (AI/Interpretation)</h3>
+                    </div>
+                    <div class="flex gap-2">
+                        <input type="file" id="file-b" class="hidden" accept="audio/*, .mp3, .wav, .m4a, .aac, .ogg">
+                        <button onclick="document.getElementById('file-b').click()" class="text-[10px] bg-zinc-800 px-3 py-1 rounded-full border border-zinc-700 hover:bg-zinc-700 transition-colors uppercase font-bold">Load Audio</button>
+                    </div>
+                </div>
+                <div id="wave-b" class="waveform-container h-32"></div>
+                <div class="flex flex-wrap gap-4 items-center bg-zinc-900/50 p-3 rounded-xl border border-zinc-800">
+                    <button id="play-b" class="w-8 h-8 flex items-center justify-center bg-zinc-800 rounded-full hover:bg-zinc-700"><i data-lucide="play" class="w-4 h-4"></i></button>
+                    <span id="time-b" class="font-mono text-zinc-500 text-xs">00:00 / 00:00</span>
+                    <div class="flex items-center gap-2 ml-auto">
+                        <label class="text-[10px] text-zinc-500 font-bold uppercase">Start</label>
+                        <input type="number" id="precise-start-b" class="precise-input" value="0" step="0.1">
+                        <label class="text-[10px] text-zinc-500 font-bold uppercase">End</label>
+                        <input type="number" id="precise-end-b" class="precise-input" value="0" step="0.1">
+                        <button id="precise-add-b" class="bg-violet-600/20 text-violet-400 border border-violet-600/30 text-[10px] px-3 py-1 rounded-md font-bold hover:bg-violet-600 hover:text-white transition-all uppercase">Add Range</button>
+                        <button id="slice-b" class="flex items-center gap-2 px-4 py-1.5 rounded-lg slice-btn-b text-[10px] font-bold transition-all disabled:opacity-30 uppercase">
+                            <i data-lucide="scissors" class="w-3 h-3"></i> Slice
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Track 3: Output Preview -->
+            <section class="space-y-4 pt-6 border-t border-zinc-800">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <div class="flex gap-1">
+                            <span class="w-1.5 h-3 rounded-full bg-track-a"></span>
+                            <span class="w-1.5 h-3 rounded-full bg-track-b"></span>
+                        </div>
+                        <h3 class="font-semibold text-zinc-200 text-sm uppercase tracking-wider">Hybrid Output</h3>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button id="undo-hybrid" class="p-1.5 rounded bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30" title="Undo Cut">
+                            <i data-lucide="undo-2" class="w-4 h-4"></i>
+                        </button>
+                        <button id="toggle-edit-hybrid" class="flex items-center gap-2 px-3 py-1 rounded bg-zinc-800 border border-zinc-700 text-[10px] font-bold uppercase transition-all">
+                            <i data-lucide="edit-3" class="w-3 h-3"></i> <span>Enable Editing</span>
+                        </button>
+                        <button id="delete-region-hybrid" class="flex items-center gap-2 px-3 py-1 rounded bg-red-600/20 text-red-400 border border-red-600/30 text-[10px] font-bold uppercase hover:bg-red-600 hover:text-white transition-all hidden">
+                            <i data-lucide="trash-2" class="w-3 h-3"></i> Cut Selection
+                        </button>
+                    </div>
+                </div>
+                <div id="wave-hybrid-container" class="waveform-container h-24 bg-zinc-900/50 border-dashed border-zinc-700">
+                    <div id="wave-hybrid"></div>
+                </div>
+                <div class="flex items-center gap-4">
+                    <button id="play-hybrid" class="w-10 h-10 flex items-center justify-center bg-white text-black rounded-full hover:bg-zinc-200"><i data-lucide="play" class="w-5 h-5"></i></button>
+                    <span id="time-hybrid" class="font-mono text-zinc-400 text-sm">00:00 / 00:00</span>
+                    <span id="hybrid-status" class="text-[10px] text-zinc-600 italic ml-auto uppercase font-bold tracking-widest">Output not rendered</span>
+                </div>
+            </section>
+        </div>
+
+        <!-- Assembly Playlist / Sequencer -->
+        <aside class="lg:col-span-4 flex flex-col bg-zinc-900 rounded-2xl border border-zinc-800 p-6 overflow-hidden max-h-[calc(100vh-200px)]">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-xl font-bold flex items-center gap-2">
+                    <i data-lucide="layers"></i> Sequencer
+                </h2>
+                <div class="flex gap-2">
+                    <button id="auto-interleave" title="Auto-Interleave Tracks (1-2-1-2...)" class="p-2 rounded bg-zinc-800 hover:bg-teal-900/20 text-teal-400 border border-zinc-700">
+                        <i data-lucide="shuffle" class="w-4 h-4"></i>
+                    </button>
+                    <button id="clear-playlist" title="Clear all" class="p-2 rounded bg-zinc-800 hover:bg-red-900/20 text-red-400 border border-zinc-700">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <div id="timeline-list" class="flex-grow overflow-y-auto space-y-2 min-h-[150px] pr-2">
+                <div class="timeline-empty py-16 text-center text-zinc-600">
+                    <i data-lucide="mouse-pointer-2" class="w-8 h-8 mx-auto mb-3 opacity-20"></i>
+                    <p class="text-xs italic">Sliced segments appear here.<br>Drag to reorder.</p>
+                </div>
+            </div>
+
+            <div class="mt-6 pt-6 border-t border-zinc-800 space-y-3">
+                <button id="export-mp3" class="w-full py-3 rounded-xl bg-teal-600 text-white font-bold flex items-center justify-center gap-2 hover:bg-teal-500 transition-all shadow-lg active:scale-95 disabled:opacity-50 group">
+                    <i data-lucide="music" class="group-[.processing]:hidden"></i>
+                    <i data-lucide="loader-2" class="w-4 h-4 spinning hidden group-[.processing]:block"></i>
+                    <span class="group-[.processing]:hidden">Export as MP3</span>
+                    <span class="hidden group-[.processing]:block">Encoding...</span>
+                </button>
+                <button id="export-wav" class="w-full py-3 rounded-xl bg-zinc-800 text-zinc-300 font-bold flex items-center justify-center gap-2 hover:bg-zinc-700 transition-all border border-zinc-700 active:scale-95 disabled:opacity-50">
+                    <i data-lucide="download"></i> Export as WAV
+                </button>
+            </div>
+        </aside>
+    </main>
+
+    <!-- Debug Log -->
+    <section class="max-w-7xl mx-auto w-full mt-auto">
+        <div class="text-[9px] uppercase tracking-widest text-zinc-600 mb-1 flex justify-between">
+            <span>System Status Log</span>
+            <button onclick="document.getElementById('debug-log').innerHTML=''" class="hover:text-zinc-400">Clear</button>
+        </div>
+        <div id="debug-log"></div>
+    </section>
+
+    <footer class="max-w-7xl mx-auto w-full py-6 border-t border-zinc-900 flex justify-between items-center text-zinc-600 text-[10px] uppercase tracking-widest">
+        <span>© 2026 Professional Audio Hybridizer Engine</span>
+        <span class="flex items-center gap-2">Offline Client-Side Rendering <i data-lucide="zap" class="w-3 h-3 text-yellow-500"></i></span>
+    </footer>
+
+    <script type="module" src="ui_manager.js"></script>
+</body>
+</html>
